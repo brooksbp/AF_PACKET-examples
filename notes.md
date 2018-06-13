@@ -104,7 +104,6 @@ SO!
 
 Transition of fd into READY state is triggerd by an I/O event.
 
-
 ## Socket API
 
 ```
@@ -229,11 +228,6 @@ int socketcall(int call, unsigned long *args);
 ```
 Invoke a socket system call.
 
-
-
-XXXX dispatch into af_packet.c ?
-
-
 ## AF_PACKET
 
 ```
@@ -332,4 +326,135 @@ $ ag SYSCALL net/socket.c
 2335:SYSCALL_DEFINE3(recvmsg, int, fd, struct user_msghdr __user *, msg,
 2481:SYSCALL_DEFINE5(recvmmsg, int, fd, struct mmsghdr __user *, mmsg,
 2508:SYSCALL_DEFINE2(socketcall, int, call, unsigned long __user *, args)
+```
+
+```
+arch/arm64/include/asm/current.h
+
+  #define current get_current()
+    return (struct task_struct *)mrs SP_EL0
+
+arch/arm64/include/asm/uaccess.h
+
+  #define access_ok(type, addr, size)  __range_ok(addr, size)
+    __range_ok(addr, size)  // test whether block of memory is valid user space address
+      ..
+```
+
+```
+include/uapi/linux/uio.h
+
+  struct iovec               <- matches POSIX-defined structure!
+  {
+    void __user *iov_base;
+    __kernel_size_t iov_len;
+  };
+
+  struct iov_iter {
+    int type;
+    size_t iov_offset;
+    size_t count;
+    union {
+      const struct iovec *iov;
+      const struct kvec *kvec;
+      const struct bio_vec *bvec;
+      struct pipe_inode_info *pipe;
+    };
+    union {
+      unsigned long nr_segs;
+      struct {
+        int idx;
+        int start_idx;
+      };
+    };
+```
+
+```
+1362:SYSCALL_DEFINE3(socket, int, family, int, type, int, protocol)
+
+static struct vfsmount *sock_mnt;
+
+static const struct net_proto_family __rcu *net_families[NPROTO];
+
+__sys_socket()
+  sock_create()
+    struct socket *sock;
+    __sock_create(.., &sock)
+      sock = sock_alloc()
+        inode = new_inode_pseudo(sock_mnt->mnt_sb)
+          inode = alloc_inode(struct super_block sb)
+        sock = SOCKET_I(inode) //socketFromInode
+        inode->i_op = &sockfs_inode_ops
+        return sock
++     pf = rcu_dereference(net_families[family])
++     pf->create(net, sock, protocol, kern)
+    return sock_map_fd(sock)
+      fd = get_unused_fd_flags(flags)
+        __alloc_fd(current->files, 0, rlimit(RLIMIT_NOFILE), flags)
+      newfile = sock_alloc_file()
+      fd_install(fd, newfile)
+```
+
+```
+1493:SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+
+__sys_bind()
+  sock = sockfd_lookup_light(fd)
+    struct fd f = fdget(fd))
+    return sock_from_file(f.file)
+  move_addr_to_kernel() //copy_from_user(kaddr, uaddr, ulen)
++ sock->ops->bind()
+```
+
+```
+1525:SYSCALL_DEFINE2(listen, int, fd, int, backlog)
+
+__sys_listen()
+  sock = sockfd_lookup_light(fd)
+    if (backlog > somaxconn)
+      backlog = somaxconn
++   sock->ops->listen()
+```
+
+```
+1797:SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
+1808:SYSCALL_DEFINE4(send, int, fd, void __user *, buff, size_t, len,
+
+__sys_sendto(int fd,
+             void __user *buff,
+             size_t len,
+             unsigned int flags,
+             struct sockaddr __user *addr,
+             int addr_len)
+  struct msghdr msg;
+  struct iovec iov;
+  import_single_range(WRITE, buff, len, &iov, i = (struct iov_iter *)&msg.msg_iter)
+    iov->iov_base = buf
+    iov->iov_len = len
+    iov_iter_init(i, rw, iov, 1, len)
+      i->xxx =
+      i->xxx =
+  sock = sockfd_lookup_light(fd))
+  msg.xxx =
+  msg.xxx =
+  sock_sendmsg(sock, &msg)
++   sock->ops->sendmsg(sock, msg, msg_data_left(msg))
+```
+
+```
+1860:SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
+1871:SYSCALL_DEFINE4(recv, int, fd, void __user *, ubuf, size_t, size,
+
+__sys_recvfrom(int fd,
+               void __user *ubuf,
+               size_t size,
+               unsigned int flags,
+               struct sockaddr __user *addr,
+               int __user *addr_len)
+  struct iovec iov;
+  struct msghdr msg;
+  import_single_range(READ, ubuf, size, &iov, &msg.msg_iter)
+  ..
+  sock_recvmsg(sock, &msg, flags)
+    sock->ops->recvmsg(sock, msg, msg_data_left(msg), flags)
 ```
