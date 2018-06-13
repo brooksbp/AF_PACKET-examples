@@ -243,9 +243,12 @@ SOCK_DGRAM
 * TX - link-level header added based on sockaddr_ll destination address
 
 ```protocol``` - ```/usr/include/linux/if_ether.h```
+
+```
 htons(ETH_P_IP  0x0800)
 non DIX types:
 htons(ETH_P_ALL 0x0003) - all protocols received
+```
 
 Use bind() to RX from address on specific interface. Otherwise, RX from all interfaces
 
