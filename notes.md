@@ -242,8 +242,10 @@ SOCK_DGRAM
 * RX - link-level header removed
 * TX - link-level header added based on sockaddr_ll destination address
 
-htons(ETH_P_ALL) - all protocols received
-
+```protocol``` - ```/usr/include/linux/if_ether.h```
+htons(ETH_P_IP  0x0800)
+non DIX types:
+htons(ETH_P_ALL 0x0003) - all protocols received
 
 Use bind() to RX from address on specific interface. Otherwise, RX from all interfaces
 
@@ -457,4 +459,123 @@ __sys_recvfrom(int fd,
   ..
   sock_recvmsg(sock, &msg, flags)
     sock->ops->recvmsg(sock, msg, msg_data_left(msg), flags)
+```
+
+## AF_PACKET Implementation
+
+```
+SOCK_DGRAM
+SOCK_RAW
+SOCK_PACKET  <--- OBSOLETE and should not be used!
+```
+
+```
+struct packet_sock {
+        /* struct sock has to be the first member of packet_sock */
+        struct sock             sk;
+        struct packet_fanout    *fanout;
+        union  tpacket_stats_u  stats;
+        struct packet_ring_buffer       rx_ring;
+        struct packet_ring_buffer       tx_ring;
+        int                     copy_thresh;
+        spinlock_t              bind_lock;
+        struct mutex            pg_vec_lock;
+        unsigned int            running;        /* bind_lock must be held */
+        unsigned int            auxdata:1,      /* writer must hold sock lock */
+                                origdev:1,
+                                has_vnet_hdr:1,
+                                tp_loss:1,
+                                tp_tx_has_off:1;
+        int                     pressure;
+        int                     ifindex;        /* bound device         */
+        __be16                  num;
+        struct packet_rollover  *rollover;
+        struct packet_mclist    *mclist;
+        atomic_t                mapped;
+        enum tpacket_versions   tp_version;
+        unsigned int            tp_hdrlen;
+        unsigned int            tp_reserve;
+        unsigned int            tp_tstamp;
+        struct net_device __rcu *cached_dev;
+        int                     (*xmit)(struct sk_buff *skb);
+        struct packet_type      prot_hook ____cacheline_aligned_in_smp;
+};
+
+static struct packet_sock *pkt_sk(struct sock *sk)
+{
+        return (struct packet_sock *)sk;
+}
+```
+
+```
+net/packet/af_packet.c
+
+__init packet_init()
+  proto_register(&packet_proto)                          PACKET, sizeof(struct packet_sock)
+  sock_register(&packet_family_ops)                      PF_PACKET, packet_create()
+  register_pernet_subsys(&packet_net_ops)                packet_net_init()
+                                                         packet_net_exit()
+  register_netdevice_notifier(&packet_netdev_notifier)   packet_notifier()
+
+packet_create(struct net *net,
+              struct socket *sock,
+              int protocol,
+              int kern)
+  struct sock *sk = sk_alloc(net, PF_PACKET, GFP_KERNEL, &packet_proto, kern)
+    sk_prot_alloc()
+      sk = kmalloc(prot->obj_size, priority)
+      sk_tx_queue_clear(sk)
+      return sk
++ sock->ops = &packet_ops
++ sock_init_data(sock, sk)
+    ..
+    sk_init_common()
+      skb_queue_head_init(&sk->sk_receive_queue)
+      skb_queue_head_init(&sk->sk_write_queue)
+      skb_queue_head_init(&sk->sk_error_queue)
+    ..
++ po->xmit = dev_queue_xmit
++ packet_alloc_pending(po)
+    po->rx_ring.pending_refcnt = NULL
+    po->tx_ring.pending_refcnt = alloc_percpu(unsigned int)
+  RCU_INIT_POINTER(po->cached_dev, NULL)
+  if (protocol)
+    __register_prot_hook(sk)
+      if (po->fanout)
+        __fanout_link(sk, po)
+      else
+        dev_add_pack(&po->prot_hook)
+          list_add_rcu(&pt->list, head)
+      sock_hold(sk)
+        refcount_inc(&sk->sk_refcnt)
+  preempt_disable()
+  sock_prot_inuse_add(net, &packet_proto, 1)
+    __this_cpu_add(net->core.prot_inuse->val[prot->inuse_idx], val)
+  preempt_enable()
+
+static const struct proto_ops packet_ops = {
+	.family =       PF_PACKET,
+	.owner =        THIS_MODULE,
+	.release =      packet_release,
+	.bind =         packet_bind,
+	.connect =      sock_no_connect,      return -EOPNOTSUPP
+	.socketpair =   sock_no_socketpair,   return -EOPNOTSUPP
+	.accept =       sock_no_accept,       return -EOPNOTSUPP
+	.getname =      packet_getname,
+	.poll =         packet_poll,
+	.ioctl =        packet_ioctl,
+	.listen =       sock_no_listen,       return -EOPNOTSUPP
+	.shutdown =     sock_no_shutdown,     return -EOPNOTSUPP
+	.setsockopt =   packet_setsockopt,
+	.getsockopt =   packet_getsockopt,
+#ifdef CONFIG_COMPAT
+	.compat_setsockopt = compat_packet_setsockopt,
+#endif
+    .sendmsg =      packet_sendmsg,
+	.recvmsg =      packet_recvmsg,
+	.mmap =         packet_mmap,
+	.sendpage =     sock_no_sendpage,     return -EOPNOTSUPP
+};
+
+
 ```
