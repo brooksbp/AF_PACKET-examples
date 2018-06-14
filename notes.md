@@ -489,7 +489,7 @@ struct packet_type {
 };
 ```
 
-```
+```c
 net/packet/internal.h
 
 /* kbdq - kernel block descriptor queue */
