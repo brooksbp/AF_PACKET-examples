@@ -744,6 +744,21 @@ packet_recvmsg()
 ```
 
 ```
+prot_hook CALLBACK
+
+packet_rcv(struct sk_buff *skb,
+           struct net_device *dev,
+           struct packet_type *pt,
+           struct net_device *orig_dev)
+  run_filter(skb, sk, skb->len)
+  nf_reset(skb)  //drop conntrack reference
+  spin_lock(&sk->sk_receive_queue.lock)
+   __skb_queue_tail(&sk->sk_receive_queue, skb)
+  spin_unlock(&sk->sk_receive_queue.lock)
+  sk->sk_data_ready(sk)
+```
+
+```
 mmap_pgoff()
   ksys_mmap_pgoff()
     vm_mmap_pgoff()
@@ -768,11 +783,15 @@ mmap_pgoff()
               __vma_link(..)
 
 packet_mmap
-  
-```
+  expected_size = 0
+  rb = &po->rx_ring
+   expected_size += rb->pg_vec_len * rb->pg_vec_pages * PAGE_SIZE
+  rb = &po->tx_ring
+   expected_size += rb->pg_vec_len * rb->pg_vec_pages * PAGE_SIZE
+  if expected_size != vma size
+    goto out
+  rb = &po->rx_ring
+   for i = 0 .. rb->pg_vec_len
+     
 
-```
-prot_hook CALLBACK
-
-packet_rcv
 ```
