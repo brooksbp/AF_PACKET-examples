@@ -473,6 +473,85 @@ SOCK_PACKET  <--- OBSOLETE and should not be used!
 ```
 
 ```
+include/linux/netdevice.h
+
+struct packet_type {
+        __be16                  type;   /* This is really htons(ether_type). */
+        struct net_device       *dev;   /* NULL is wildcarded here           */
+    	int                     (*func) (struct sk_buff *,
+                                         struct net_device *,
+                                         struct packet_type *,
+                                         struct net_device *);
+        bool                    (*id_match)(struct packet_type *ptype,
+                                            struct sock *sk);
+        void                    *af_packet_priv;
+        struct list_head        list;
+};
+```
+
+```
+net/packet/internal.h
+
+/* kbdq - kernel block descriptor queue */
+struct tpacket_kbdq_core {
+        struct pgv      *pkbdq;
+        unsigned int    feature_req_word;
+        unsigned int    hdrlen;
+        unsigned char   reset_pending_on_curr_blk;
+        unsigned char   delete_blk_timer;
+        unsigned short  kactive_blk_num;
+        unsigned short  blk_sizeof_priv;
+
+        /* last_kactive_blk_num:
+         * trick to see if user-space has caught up
+         * in order to avoid refreshing timer when every single pkt arrives.
+         */
+        unsigned short  last_kactive_blk_num;
+
+        char            *pkblk_start;
+        char            *pkblk_end;
+        int             kblk_size;
+        unsigned int    max_frame_len;
+        unsigned int    knum_blocks;
+        uint64_t        knxt_seq_num;
+        char            *prev;
+        char            *nxt_offset;
+        struct sk_buff  *skb;
+
+        atomic_t        blk_fill_in_prog;
+
+        /* Default is set to 8ms */
+#define DEFAULT_PRB_RETIRE_TOV  (8)
+
+        unsigned short  retire_blk_tov;
+        unsigned short  version;
+        unsigned long   tov_in_jiffies;
+
+        /* timer to retire an outstanding block */
+        struct timer_list retire_blk_timer;
+};
+
+struct pgv {
+	char *buffer;
+};
+
+struct packet_ring_buffer {
+	struct pgv              *pg_vec;
+
+	unsigned int            head;
+	unsigned int            frames_per_block;
+	unsigned int            frame_size;
+	unsigned int            frame_max;
+
+	unsigned int            pg_vec_order;
+	unsigned int            pg_vec_pages;
+	unsigned int            pg_vec_len;
+
+	unsigned int __percpu   *pending_refcnt;
+
+	struct tpacket_kbdq_core        prb_bdqc;
+};
+
 struct packet_sock {
         /* struct sock has to be the first member of packet_sock */
         struct sock             sk;
@@ -542,6 +621,8 @@ packet_create(struct net *net,
     po->rx_ring.pending_refcnt = NULL
     po->tx_ring.pending_refcnt = alloc_percpu(unsigned int)
   RCU_INIT_POINTER(po->cached_dev, NULL)
++ po->prot_hook.func = packet_rcv;
+  po->prot_hook.af_packet_priv = sk;
   if (protocol)
     __register_prot_hook(sk)
       if (po->fanout)
@@ -555,7 +636,9 @@ packet_create(struct net *net,
   sock_prot_inuse_add(net, &packet_proto, 1)
     __this_cpu_add(net->core.prot_inuse->val[prot->inuse_idx], val)
   preempt_enable()
+```
 
+```
 static const struct proto_ops packet_ops = {
 	.family =       PF_PACKET,
 	.owner =        THIS_MODULE,
@@ -579,6 +662,117 @@ static const struct proto_ops packet_ops = {
 	.mmap =         packet_mmap,
 	.sendpage =     sock_no_sendpage,     return -EOPNOTSUPP
 };
+```
 
+```
+packet_bind()
+  packet_do_bind(sk,        // Attach a packet hook
+                 NULL,
+                 sll->sll_ifindex,
+                 sll->sll_protocol ? : pkt_sk(sk)->num)
+    if (po->fanout)
+      return -EINVAL
+    struct net_device *dev = dev_get_by_index_rcu(sock_net(sk), ifindex)
+    dev_hold(dev)  // Hold reference to device to keep it from being freed
+      this_cpu_inc(*dev->pcpu_refcnt)
+    if (po->prot_hook.type != proto ||
+        po->prot_hook.dev  != dev)
+      //rehook
+    dev_put(cur_dev) // release reference to device
+    register_prot_hook(sk)
+```
 
+```
+packet_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
+  if (po->tx_ring.pg_vec)
+    return tpacket_snd(po, msg)
+  else
+    return packet_snd(sock, msg, len)
+
+packet_snd(sock, msg, len)
+  hlen = LL_RESERVED_SPACE(dev)
+  tlen = dev->needed_tailroom
++ struct sk_buff *skb = packet_alloc_skb(sk      = sk,
+                                         prepad  = hlen + tlen,
+                                         reserve = hlen,
+                                         len     = len,
+                                         linear  = linear,
+                                         noblock = msg->msg_flags & MSG_DONTWAIT,
+                                         &err)
+    skb = sock_alloc_send_pskb(sk             = sk,
+                               header_len     = prepad + linear,
+                               data_len       = len - linear,
+                               noblock        = noblock,
+                               err,
+                               max_page_order = 0)
+      //wait until "transmit queue bytes committed" is less than we need to send it..
+      return alloc_skb_with_frags(header_len,
+                                  data_len,
+                                  max_page_order,
+                                  errcode,
+                                  sk->sk_allocation)
+        npages = (data_len + (PAGE_SIZE - 1)) >> PAGE_SHIFT
+        skb = alloc_skb(header_len, ..)
++         __alloc_skb(size, priority, 0, NUMA_NO_NODE)
+        for i=0..npages
+          alloc_page(..)
+          skb_fill_page_desc(..)
+    skb_reserve(skb, reserve)
+    skb_put(skb, linear)
+    skb->data_len = len - linear
+    skb->len += len - linear
+  skb_reset_network_header(skb)
+  skb_reserve(dev->hard_header_len)
++ skb_copy_datagram_from_iter(skb, offset, &msg->msg_iter, len)
+  dev_validate_header(dev, skb->data, len)
+  skb->protocol = proto
+  skb->dev      = dev
+  skb->priority = sk->sk_priotity
+  skb_probe_transport_header(skb, reserve)
++ po->xmit(skb)
+  dev_put(dev)
+  return len
+```
+
+```
+// Pull a packet from our receive queue and hand it to user
+packet_recvmsg()
+  skb = skb_recv_datagram(sk, ..)
+  skb_copy_datagram_msg(skb, 0, msg, copied)
+  sock_recv_ts_and_drops(msg, sk, skb)
+  skb_free_datagram(sk, skb)
+```
+
+```
+mmap_pgoff()
+  ksys_mmap_pgoff()
+    vm_mmap_pgoff()
+      do_mmap_pgoff()
+        do_mmap()
+          // verify (or get new) addr and ensure it represents valid section of addr space
+          addr = get_unmapped_area(file, addr, len, pgoff, flags)
+          addr = mmap_region(file, addr, len, vm_flags, pgoff, uf)
+            //clear any old mappings
+            struct vm_area_struct *vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL)
+            vma->vm_mm        = mm
+            vma->vm_start     = addr
+            vma->vm_end       = addr + len
+            vma->vm_flags     = vm_flags
+            vma->vm_page_prot = vm_get_page_prot(vm_flags)
+            vma->vm_pgoff     = pgoff
+            if (file)
+              vma->vm_file = get_file(file)
+              call_mmap(file, vma)
++               file->f_op->mmap(file, vma)
+            vma_link(mm, vma, ..)
+              __vma_link(..)
+
+packet_mmap
+  
+```
+
+```
+prot_hook CALLBACK
+
+packet_rcv
 ```
