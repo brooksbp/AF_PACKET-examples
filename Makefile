@@ -7,5 +7,6 @@ all:
 	$(CC) $(CFLAGS) -o psk-raw-rx -pthread psk-raw-rx.c
 
 clean:
+	rm -rf perf.data*
 	rm -rf psk-raw-tx
 	rm -rf psk-raw-rx
