@@ -93,21 +93,24 @@ int main(int argc, char *argv[])
 	eh->ether_shost[3] = ifr.ifr_hwaddr.sa_data[3];
 	eh->ether_shost[4] = ifr.ifr_hwaddr.sa_data[4];
 	eh->ether_shost[5] = ifr.ifr_hwaddr.sa_data[5];
-	eh->ether_dhost[0] = 0x11;
-	eh->ether_dhost[1] = 0x12;
-	eh->ether_dhost[2] = 0x13;
-	eh->ether_dhost[3] = 0x14;
-	eh->ether_dhost[4] = 0x15;
-	eh->ether_dhost[5] = 0x16;
+	eh->ether_dhost[0] = 0x00;
+	eh->ether_dhost[1] = 0x51;
+	eh->ether_dhost[2] = 0x82;
+	eh->ether_dhost[3] = 0x11;
+	eh->ether_dhost[4] = 0x22;
+	eh->ether_dhost[5] = 0x00;
 	eh->ether_type = htons(ETH_P_IP);
 	buffer_len += sizeof(struct ether_header);
 
+	//struct iphdr *ih = (struct iphdr *)(buffer + sizeof(struct ether_header));
+	buffer_len += sizeof(struct iphdr *);
+
 	buffer[buffer_len++] = 0xaa;
 	buffer[buffer_len++] = 0xaa;
 	buffer[buffer_len++] = 0xaa;
 	buffer[buffer_len++] = 0xaa;
 
-	//struct iphdr *ih = (struct iphdr *)(buffer + sizeof(struct ether_header));
+	buffer_len = 64;
 
 	struct sockaddr_ll sa;
 	sa.sll_ifindex = opt_ifindex;
