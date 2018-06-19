@@ -472,7 +472,7 @@ SOCK_RAW
 SOCK_PACKET  <--- OBSOLETE and should not be used!
 ```
 
-```
+```c
 include/linux/netdevice.h
 
 struct packet_type {
@@ -794,4 +794,10 @@ packet_mmap
    for i = 0 .. rb->pg_vec_len
      
 
+```
+
+## PACKET_MMAP
+
+```
+Documentation/networking/packet_mmap.txt
 ```
