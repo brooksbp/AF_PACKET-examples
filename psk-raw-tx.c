@@ -5,6 +5,7 @@
 #include <linux/if_packet.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,8 +61,46 @@ static void parse_argv(int argc, char *argv[])
 	}
 }
 
+static unsigned long time_now(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000000000UL + ts.tv_nsec;
+}
+
+static unsigned long stats_tx_packets;
+
+static void *stats_thread(void *arg)
+{
+	(void)arg;
+	unsigned long prev_time_now = time_now();
+	unsigned long prev_stats_tx_packets = 0;
+
+	for (;;) {
+		usleep(1000000);
+		unsigned long now = time_now();
+		unsigned long tx_packets = stats_tx_packets;
+
+		unsigned long ns = now - prev_time_now;
+		unsigned long packets = tx_packets - prev_stats_tx_packets;
+
+		printf("%'-11.0f pps\n", packets * 1000000000. / ns);
+
+		prev_time_now = now;
+		prev_stats_tx_packets = tx_packets;
+	}
+	return NULL;
+}
+
 int main(int argc, char *argv[])
 {
+	pthread_t thread;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_create(&thread, &attr, stats_thread, NULL);
+	pthread_attr_destroy(&attr);
+
+
 	struct ifreq ifr;
 	int psk;
 
@@ -122,10 +161,13 @@ int main(int argc, char *argv[])
 	sa.sll_addr[4] = 0x15;
 	sa.sll_addr[5] = 0x16;
 
-	if (sendto(psk, buffer, buffer_len, 0, (struct sockaddr *)&sa, sizeof(struct sockaddr_ll)) < 0) {
-		perror("sendto");
-		close(psk);
-		exit(EXIT_FAILURE);
+	for (;;) {
+		if (sendto(psk, buffer, buffer_len, 0, (struct sockaddr *)&sa, sizeof(struct sockaddr_ll)) < 0) {
+			perror("sendto");
+			close(psk);
+			exit(EXIT_FAILURE);
+		}
+		stats_tx_packets++;
 	}
 
 	close(psk);

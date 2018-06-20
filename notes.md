@@ -796,8 +796,16 @@ packet_mmap
 
 ```
 
+## Perf
+
+```
+$ sudo perf record -p `pidof psk-raw-rx`
+$ sudo perf report --vmlinux ~/bpf-next/vmlinux
+```
+
 ## PACKET_MMAP
 
 ```
 Documentation/networking/packet_mmap.txt
 ```
+
