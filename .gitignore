@@ -1,4 +1,4 @@
 perf.data*
 
-psk-raw-tx
-psk-raw-rx
+rx-packet
+tx-packet
