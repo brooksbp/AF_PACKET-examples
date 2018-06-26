@@ -220,7 +220,7 @@ int main(int argc, char *argv[])
 			close(psk);
 			exit(EXIT_FAILURE);
 		}
-		// Register an RX ring
+		// Register a RX ring
 		ring = malloc(sizeof(*ring));
 		unsigned int block_size = SZ_4M;
 		unsigned int block_nr = 64;
